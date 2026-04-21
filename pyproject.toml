@@ -1,0 +1,13 @@
+[project]
+name = "handwriting-synthesis"
+version = "1.0.0"
+description = "Handwriting synthesis for pen plotters"
+requires-python = ">=3.11"
+dependencies = [
+    "numpy",
+    "scipy",
+    "streamlit",
+]
+
+[project.scripts]
+handwrite = "app:main"
