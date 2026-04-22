@@ -6,7 +6,7 @@ from pathlib import Path
 import streamlit as st
 
 import settings
-from hand import VALID_CHARS, Hand, strokes_to_svg
+from hand import DASH_MAP, VALID_CHARS, Hand, strokes_to_svg
 
 PREVIEWS_DIR = Path(__file__).parent / "previews"
 NUM_STYLES = 13
@@ -40,12 +40,15 @@ def main() -> None:
                                  help="Pen width for SVG paths")
         stroke_color = st.selectbox("Stroke color", COLORS,
                                     index=COLORS.index(cfg["stroke_color"]) if cfg["stroke_color"] in COLORS else 0)
-        num_versions = st.number_input("Versions to generate", 1, 10, int(cfg["num_versions"]))
+        num_versions = st.number_input("Versions to generate", 1, 99, int(cfg["num_versions"]))
+        humanness = st.slider("Humanness", 0.0, 2.0, float(cfg["humanness"]), 0.1,
+                              help="0 = robotic perfection, 1 = natural, 2 = sloppy")
 
         if st.button("Save settings"):
             settings.put_all(dict(style=style, bias=bias, line_width=line_width,
                                   scale=scale, stroke_width=stroke_width,
-                                  stroke_color=stroke_color, num_versions=num_versions))
+                                  stroke_color=stroke_color, num_versions=num_versions,
+                                  humanness=humanness))
             st.success("Saved!")
 
     with st.expander("Style previews", expanded=False):
@@ -57,19 +60,23 @@ def main() -> None:
                 if p.exists():
                     st.image(p.read_text(), use_container_width=True)
 
-    text = st.text_area("Enter text", height=150,
+    if "loaded_prompt" in st.session_state:
+        st.session_state["text_input"] = st.session_state.pop("loaded_prompt")
+
+    text = st.text_area("Enter text", height=150, key="text_input",
                         placeholder="Type your letter here...\nLong lines will auto-wrap.")
 
-    invalid = set(text) - VALID_CHARS - {"\n"}
+    invalid = set(text.translate(DASH_MAP)) - VALID_CHARS - {"\n"}
     if invalid:
         st.warning(f"These characters will be stripped: {invalid}")
 
     if st.button("Generate", type="primary", disabled=not text.strip()):
+        settings.save_prompt(text)
         for v in range(int(num_versions)):
             with st.spinner(f"Generating version {v + 1}/{int(num_versions)}..."):
                 strokes = hand.generate(text, style=style, bias=bias, line_width=line_width)
                 svg = strokes_to_svg(strokes, scale=scale, stroke_color=stroke_color,
-                                     stroke_width=stroke_width)
+                                     stroke_width=stroke_width, humanness=humanness)
 
             label = f"Version {v + 1}" if num_versions > 1 else "Result"
             st.subheader(label)
@@ -82,6 +89,18 @@ def main() -> None:
             with col2:
                 with st.expander("View SVG source"):
                     st.code(svg, language="xml")
+
+    st.divider()
+    st.subheader("Prompt History")
+    for pid, ptext, created in settings.list_prompts():
+        title = next((ln for ln in ptext.split("\n") if ln.strip()), ptext[:60])
+        c1, c2 = st.columns([3, 1])
+        with c1:
+            if st.button(title[:80], key=f"prompt_{pid}"):
+                st.session_state["loaded_prompt"] = ptext
+                st.rerun()
+        with c2:
+            st.caption(created)
 
 
 if __name__ == "__main__":

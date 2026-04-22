@@ -23,6 +23,7 @@ STYLES_DIR = Path(__file__).parent / "styles"
 
 _sigmoid = lambda x: 1.0 / (1.0 + np.exp(-np.clip(x, -20, 20)))
 _softplus = lambda x: np.log1p(np.exp(np.clip(x, -20, 20)))
+DASH_MAP = str.maketrans("\u2012\u2013\u2014\u2015\u2212", "-----")
 
 
 def encode(text: str) -> np.ndarray:
@@ -160,8 +161,9 @@ class Hand:
         return np.array(outputs) if outputs else np.zeros((1, 3))
 
     def generate(self, text: str, style: int | None = None, bias: float = 0.75,
-                 line_width: int = 60) -> list[np.ndarray]:
-        """Generate strokes for text, auto-wrapping at line_width chars."""
+                 line_width: int = 60) -> list[np.ndarray | None]:
+        """Generate strokes for text, auto-wrapping at line_width chars. None = blank line."""
+        text = text.translate(DASH_MAP)
         text = "".join(ch for ch in text if ch in VALID_CHARS or ch == "\n")
 
         lines: list[str] = []
@@ -171,7 +173,8 @@ class Hand:
                 continue
             lines.extend(textwrap.wrap(paragraph, width=line_width) or [""])
 
-        return [self._generate_line(line, style=style, bias=bias) for line in lines if line]
+        return [self._generate_line(line, style=style, bias=bias) if line else None
+                for line in lines]
 
 
 
@@ -206,42 +209,73 @@ def _align(coords: np.ndarray) -> np.ndarray:
     return coords
 
 
-def strokes_to_svg(stroke_list: list[np.ndarray], scale: float = 1.5,
-                   stroke_color: str = "black", stroke_width: float = 2.0) -> str:
-    """Convert list of stroke arrays (one per line) to SVG string."""
+def strokes_to_svg(stroke_list: list[np.ndarray | None], scale: float = 1.5,
+                   stroke_color: str = "black", stroke_width: float = 2.0,
+                   humanness: float = 1.0) -> str:
+    """Convert list of stroke arrays (one per line) to SVG. None entries = blank lines."""
+    h = humanness
     line_height = 60
-    view_width = 1000
-    view_height = line_height * (len(stroke_list) + 1)
+    max_x = 0.0
 
     paths = []
     y_offset = -(3 * line_height / 4)
+    margin_x = 20.0
+    page_tilt = np.random.normal(0, 0.001 * h)
+    line_idx = 0
 
-    for offsets in stroke_list:
-        offsets = offsets.copy()
+    for entry in stroke_list:
+        if entry is None:
+            y_offset -= line_height
+            continue
+
+        offsets = entry.copy()
         offsets[:, :2] *= scale
         coords = _offsets_to_coords(offsets)
         coords = _denoise(coords)
         coords[:, :2] = _align(coords[:, :2])
         coords[:, 1] *= -1
         coords[:, :2] -= coords[:, :2].min(axis=0)
-        coords[:, 0] += (view_width - coords[:, 0].max()) / 2
-        coords[:, 1] += -y_offset
 
-        d = "M0,0 "
-        prev_eos = 1.0
+        margin_x += np.random.normal(0, 1.5 * h)
+        coords[:, 0] += np.clip(margin_x, 10, 40)
+        coords[:, 1] += -y_offset + line_idx * page_tilt * 1000
+
+        theta = np.random.normal(0, 0.004 * h)
+        cx = coords[:, 0].min()
+        cy = coords[:, 1].mean()
+        dx, dy = coords[:, 0] - cx, coords[:, 1] - cy
+        coords[:, 0] = cx + dx * np.cos(theta) - dy * np.sin(theta)
+        coords[:, 1] = cy + dx * np.sin(theta) + dy * np.cos(theta)
+
+        max_x = max(max_x, float(coords[:, 0].max()))
+
+        segments: list[list[tuple[float, float]]] = [[]]
         for x, y, eos in coords:
-            cmd = "M" if prev_eos == 1.0 else "L"
-            d += f"{cmd}{x:.1f},{y:.1f} "
-            prev_eos = eos
+            segments[-1].append((x, y))
+            if eos == 1.0 and segments[-1]:
+                segments.append([])
+        segments = [s for s in segments if s]
+        segments.reverse()
+
+        d = ""
+        for seg in segments:
+            d += f"M{seg[0][0]:.1f},{seg[0][1]:.1f} "
+            for x, y in seg[1:]:
+                d += f"L{x:.1f},{y:.1f} "
+
+        sw = stroke_width * np.clip(np.random.normal(1.0, 0.04 * h), 0.85, 1.15)
         paths.append(
-            f'<path d="{d}" stroke="{stroke_color}" stroke-width="{stroke_width}" '
+            f'<path d="{d}" stroke="{stroke_color}" stroke-width="{sw:.2f}" '
             f'fill="none" stroke-linecap="round"/>'
         )
-        y_offset -= line_height
+        y_offset -= line_height + np.random.normal(0, 2.5 * h)
+        line_idx += 1
+
+    view_width = max_x + 40
+    view_height = line_height * (len(stroke_list) + 1)
 
     return (
-        f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {view_width} {view_height}">'
-        f'<rect width="{view_width}" height="{view_height}" fill="white"/>'
+        f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {view_width:.0f} {view_height}">'
         + "".join(paths)
         + "</svg>"
     )

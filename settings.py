@@ -15,12 +15,15 @@ DEFAULTS: dict[str, str | int | float] = {
     "line_width": 60,
     "scale": 1.5,
     "num_versions": 1,
+    "humanness": 1.0,
 }
 
 
 def _conn() -> sqlite3.Connection:
     db = sqlite3.connect(str(DB_PATH))
     db.execute("CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT)")
+    db.execute("CREATE TABLE IF NOT EXISTS prompts "
+               "(id INTEGER PRIMARY KEY, text TEXT, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)")
     return db
 
 
@@ -62,3 +65,18 @@ def put_all(data: dict[str, str | int | float]) -> None:
         )
     db.commit()
     db.close()
+
+
+def save_prompt(text: str) -> None:
+    db = _conn()
+    db.execute("INSERT INTO prompts (text) VALUES (?)", (text,))
+    db.commit()
+    db.close()
+
+
+def list_prompts() -> list[tuple[int, str, str]]:
+    """Return (id, text, created_at) rows, newest first."""
+    db = _conn()
+    rows = db.execute("SELECT id, text, created_at FROM prompts ORDER BY id DESC").fetchall()
+    db.close()
+    return rows
